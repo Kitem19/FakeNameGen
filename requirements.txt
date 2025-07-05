@@ -2,4 +2,6 @@
 streamlit
 faker
 pandas
-python-stdnum
+requests
+openpyxl
+pydrive
