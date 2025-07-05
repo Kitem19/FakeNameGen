@@ -1,4 +1,0 @@
-streamlit
-faker
-pandas
-python-stdnum
