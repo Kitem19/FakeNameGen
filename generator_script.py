@@ -1,16 +1,89 @@
 
+import os
 import random
 import faker
 import pandas as pd
-from faker.providers import bank, address, phone_number, person, date_time, internet, company
-from stdnum import iban as iban_validator
+import requests
+import json
 
-def genera_iban_valido(fake, max_tentativi=10):
-    for _ in range(max_tentativi):
-        iban_generato = fake.iban()
-        if iban_validator.is_valid(iban_generato):
-            return iban_generato
+from faker.providers import bank, address, phone_number, person, date_time, internet, company
+
+IBAN_CACHE_FILE = "iban_cache.json"
+EXCLUDED_IBAN_FILE = "iban_exclude.json"
+
+def iban_valido(iban):
+    url = f"https://openiban.com/validate/{iban}?getBIC=true&validateBankCode=true"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("valid", False)
+        else:
+            return False
+    except Exception:
+        return False
+
+def carica_cache():
+    if os.path.exists(IBAN_CACHE_FILE):
+        with open(IBAN_CACHE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def salva_cache(cache):
+    with open(IBAN_CACHE_FILE, "w") as f:
+        json.dump(cache, f)
+
+def carica_esclusi():
+    if os.path.exists(EXCLUDED_IBAN_FILE):
+        with open(EXCLUDED_IBAN_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def salva_esclusi(exclude_set):
+    with open(EXCLUDED_IBAN_FILE, "w") as f:
+        json.dump(list(exclude_set), f)
+
+def ottieni_o_aggiungi_iban(country_code):
+    country_code = country_code.upper()
+    cache = carica_cache()
+    esclusi = carica_esclusi()
+    if country_code not in cache:
+        cache[country_code] = []
+
+    # Restituisci uno random tra i 5 se già presenti
+    if len(cache[country_code]) >= 5:
+        salva_cache(cache)
+        return random.choice(cache[country_code])
+
+    fake = faker.Faker()
+    fake.add_provider(bank)
+    tentativi = 0
+    while len(cache[country_code]) < 5 and tentativi < 50:
+        nuovo_iban = fake.iban(country_code=country_code)
+        if nuovo_iban in cache[country_code] or nuovo_iban in esclusi:
+            tentativi += 1
+            continue
+        if iban_valido(nuovo_iban):
+            cache[country_code].append(nuovo_iban)
+            salva_cache(cache)
+            return nuovo_iban
+        tentativi += 1
+
+    salva_cache(cache)
     return None
+
+def escludi_iban(iban):
+    esclusi = carica_esclusi()
+    cache = carica_cache()
+
+    for paese, lista in cache.items():
+        if iban in lista:
+            lista.remove(iban)
+            esclusi.add(iban)
+            break
+
+    salva_cache(cache)
+    salva_esclusi(esclusi)
 
 def genera_dati(paese, n=1, campi=None):
     localizzazioni = {
@@ -18,6 +91,12 @@ def genera_dati(paese, n=1, campi=None):
         'francia': 'fr_FR',
         'germania': 'de_DE',
         'lussemburgo': 'fr_LU'
+    }
+    iso_codes = {
+        'italia': 'IT',
+        'francia': 'FR',
+        'germania': 'DE',
+        'lussemburgo': 'LU'
     }
 
     paese = paese.lower()
@@ -45,8 +124,8 @@ def genera_dati(paese, n=1, campi=None):
         if 'Codice Fiscale' in campi: profilo['Codice Fiscale'] = fake.ssn() if paese == 'italia' else 'N/A'
         if 'Partita IVA' in campi: profilo['Partita IVA'] = fake.vat_id() if hasattr(fake, 'vat_id') else 'N/A'
         if 'IBAN' in campi:
-            iban_valido = genera_iban_valido(fake)
-            profilo['IBAN'] = iban_valido if iban_valido else 'NON VALIDO'
+            iban = ottieni_o_aggiungi_iban(iso_codes[paese])
+            profilo['IBAN'] = iban if iban else "Non trovato"
         if 'Paese' in campi: profilo['Paese'] = paese.capitalize()
         dati.append(profilo)
 
