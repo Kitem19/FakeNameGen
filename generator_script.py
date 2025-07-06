@@ -5,8 +5,8 @@ import faker
 import pandas as pd
 import requests
 import json
-
 from faker.providers import bank, address, phone_number, person, date_time, internet, company
+from faker.providers.bank import Provider as BankProvider
 
 IBAN_CACHE_FILE = "iban_cache.json"
 EXCLUDED_IBAN_FILE = "iban_exclude.json"
@@ -50,16 +50,13 @@ def ottieni_o_aggiungi_iban(country_code):
     if country_code not in cache:
         cache[country_code] = []
 
-    # Restituisci uno random tra i 5 se già presenti
     if len(cache[country_code]) >= 5:
         salva_cache(cache)
         return random.choice(cache[country_code])
 
-    fake = faker.Faker()
-    fake.add_provider(bank)
     tentativi = 0
     while len(cache[country_code]) < 5 and tentativi < 50:
-        nuovo_iban = fake.iban(country_code=country_code)
+        nuovo_iban = BankProvider.iban(None, country_code=country_code)
         if nuovo_iban in cache[country_code] or nuovo_iban in esclusi:
             tentativi += 1
             continue
