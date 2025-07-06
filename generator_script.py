@@ -10,7 +10,6 @@ import streamlit as st # Necessario per st.session_state
 # Aggiungi o modifica gli IBAN qui secondo necessità.
 PREDEFINED_IBANS = {
     'IT': [
-        'IT60X0542811101000000123456',
         'IT78 D030 0203 2804 1273 3151 412',
         'IT06 G030 0203 2803 5544 7775 818',
         'IT86 L030 0203 2805 6293 1199 695',
