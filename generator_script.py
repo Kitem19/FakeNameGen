@@ -6,202 +6,241 @@ import faker
 import pandas as pd
 import requests
 import json
+# Importa i provider standard (anche se spesso caricati con la locale)
 from faker.providers import address, phone_number, person, date_time, internet, company
-# Keep BankProvider import if you still want the class object,
-# but you won't add it manually anymore
-# from faker.providers.bank import Provider as BankProvider
+# Non importiamo più BankProvider per aggiungerlo manualmente
 
+# Definiamo i nomi dei file
 IBAN_CACHE_FILE = "iban_cache.json"
 EXCLUDED_IBAN_FILE = "iban_exclude.json"
 
 def iban_valido(iban):
+    # Usa l'API esterna per la validazione
     url = f"https://openiban.com/validate/{iban}?getBIC=true&validateBankCode=true"
     try:
-        # Use a slightly longer timeout just in case the service is slow
-        response = requests.get(url, timeout=10) 
+        # Aumentato il timeout per dare più tempo alla risposta
+        response = requests.get(url, timeout=15)
+        # Controlla esplicitamente lo status code
         if response.status_code == 200:
             data = response.json()
+            # Controlla la chiave 'valid' nel JSON di risposta
             return data.get("valid", False)
         else:
-            # Handle non-200 responses explicitly
-            # print(f"Validation failed for {iban}: Status code {response.status_code}") 
+            # Potresti loggare o stampare lo status code per debug
+            # print(f"Validazione fallita per {iban}: Status code {response.status_code}")
             return False
     except requests.exceptions.RequestException as e:
-        # Catch specific request exceptions for better debugging if needed
-        # print(f"Validation error for {iban}: {e}")
+        # Logga o stampa errori specifici di request (timeout, connection error, ecc.)
+        # print(f"Errore di richiesta validazione IBAN per {iban}: {e}")
         return False
     except Exception as e:
-        # Catch any other unexpected errors
-        # print(f"An unexpected error occurred during validation for {iban}: {e}")
+        # Logga o stampa altri errori inattesi
+        # print(f"Errore inatteso durante validazione IBAN per {iban}: {e}")
         return False
 
+# Funzioni per caricare e salvare cache/esclusi con gestione errori
 def carica_cache():
     if os.path.exists(IBAN_CACHE_FILE):
         try:
             with open(IBAN_CACHE_FILE, "r") as f:
-                 # Add error handling for empty or invalid JSON
                  content = f.read()
+                 # Gestisce il caso di file vuoto
                  if not content:
                      return {}
                  return json.loads(content)
         except (json.JSONDecodeError, Exception) as e:
-            print(f"Error loading IBAN cache: {e}")
-            return {} # Return empty cache on error
+            # Stampa un messaggio di errore se il file cache è corrotto o illeggibile
+            print(f"Errore caricamento cache IBAN '{IBAN_CACHE_FILE}': {e}")
+            return {} # Restituisce una cache vuota per non bloccare l'app
     return {}
 
 def salva_cache(cache):
     try:
         with open(IBAN_CACHE_FILE, "w") as f:
-            json.dump(cache, f, indent=4) # Add indent for readability
+            # Aggiunge indentazione per rendere il file JSON leggibile
+            json.dump(cache, f, indent=4)
     except Exception as e:
-        print(f"Error saving IBAN cache: {e}")
+        print(f"Errore salvataggio cache IBAN '{IBAN_CACHE_FILE}': {e}")
 
 
 def carica_esclusi():
     if os.path.exists(EXCLUDED_IBAN_FILE):
         try:
             with open(EXCLUDED_IBAN_FILE, "r") as f:
-                # Add error handling for empty or invalid JSON
                 content = f.read()
+                # Gestisce il caso di file vuoto
                 if not content:
-                    return set()
-                return set(json.loads(content))
+                    return set() # Restituisce un set vuoto
+                # Assicura che sia una lista prima di convertirla in set
+                data = json.loads(content)
+                if isinstance(data, list):
+                    return set(data)
+                else:
+                    print(f"Contenuto non valido nel file esclusi '{EXCLUDED_IBAN_FILE}'.")
+                    return set() # Restituisce un set vuoto se il formato non è corretto
         except (json.JSONDecodeError, Exception) as e:
-            print(f"Error loading excluded IBANs: {e}")
-            return set() # Return empty set on error
+            # Stampa un messaggio di errore se il file esclusi è corrotto o illeggibile
+            print(f"Errore caricamento lista esclusi '{EXCLUDED_IBAN_FILE}': {e}")
+            return set() # Restituisce un set vuoto per non bloccare l'app
     return set()
 
 def salva_esclusi(exclude_set):
     try:
         with open(EXCLUDED_IBAN_FILE, "w") as f:
-            json.dump(list(exclude_set), f, indent=4) # Add indent for readability
+            # Salva come lista perché il JSON set non esiste
+            json.dump(list(exclude_set), f, indent=4)
     except Exception as e:
-        print(f"Error saving excluded IBANs: {e}")
+        print(f"Errore salvataggio lista esclusi '{EXCLUDED_IBAN_FILE}': {e}")
 
 
 def ottieni_o_aggiungi_iban(country_code):
-    country_code_upper = country_code.upper() # Use a new variable to avoid shadowing input
+    country_code_upper = country_code.upper()
     cache = carica_cache()
     esclusi = carica_esclusi()
 
+    # Assicura che la chiave paese esista nella cache con una lista vuota se nuova
     if country_code_upper not in cache:
         cache[country_code_upper] = []
 
-    if len(cache[country_code_upper]) >= 5:
-        salva_cache(cache) # Ensure cache is saved even if we return early
-        # Only return from cached IBANs that are NOT excluded
-        available_ibans = [iban for iban in cache[country_code_upper] if iban not in esclusi]
-        if available_ibans:
-             return random.choice(available_ibans)
-        else:
-             # If all cached IBANs for this country are now excluded, try generating new ones
-             cache[country_code_upper] = [] # Clear the cache for this country to force regeneration
-             # Continue below to generate new ones
+    # Filtra gli IBAN in cache per rimuovere quelli che sono stati esclusi nel frattempo
+    cache[country_code_upper] = [iban for iban in cache.get(country_code_upper, []) if iban not in esclusi]
 
-    # Mapping from ISO 2-letter code to Faker locale string
+    # Se abbiamo già 5 IBAN validi in cache per questo paese (e non esclusi), ne scegliamo uno a caso
+    if len(cache.get(country_code_upper, [])) >= 5:
+        salva_cache(cache) # Salva la cache pulita prima di tornare
+        # Assicura che ci siano IBAN disponibili dopo la pulizia
+        if cache.get(country_code_upper):
+            return random.choice(cache[country_code_upper])
+        # Se non ci sono, continua per generarne di nuovi
+
+    # Mappatura codice ISO 2 lettere -> locale Faker
     iso_to_locale = {
         'IT': 'it_IT',
         'FR': 'fr_FR',
         'DE': 'de_DE',
-        'LU': 'fr_LU' # Using the same locale as in genera_dati
+        'LU': 'fr_LU' # O 'lb_LU' se esiste una locale più specifica, ma fr_LU è comune
     }
 
-    locale = iso_to_locale.get(country_code_upper, 'en_US') # Get locale based on country_code
+    # Ottiene la locale corrispondente o usa 'en_US' come fallback (potrebbe non generare IBAN specifici)
+    locale = iso_to_locale.get(country_code_upper, 'en_US')
 
-    if locale == 'en_US' and country_code_upper not in iso_to_locale:
-         # Handle unsupported country codes explicitly if needed
-         print(f"Warning: No specific locale mapped for country code {country_code}. Using en_US which might not support IBAN generation for this country.")
-         # Optionally return None or raise an error here if the country is not in your mapping
+    # Controlla se la locale è supportata da Faker (opzionale ma utile per debug)
+    if locale not in faker.config.AVAILABLE_LOCALES:
+         print(f"Warning: Locale '{locale}' per paese '{country_code_upper}' non disponibile in Faker. Usando fallback 'en_US'.")
+         locale = 'en_US'
+
 
     tentativi = 0
-    # Increase attempts slightly as validation can sometimes fail randomly or service is down
-    max_attempts = 100 
-    
+    # Aumentato significativamente il numero di tentativi per trovare un IBAN valido
+    max_attempts = 300 
+    valid_iban_trovato = None # Variabile per memorizzare l'IBAN valido trovato nella ricerca
+
     while len(cache[country_code_upper]) < 5 and tentativi < max_attempts:
         try:
-            # Initialize Faker WITH the specific locale
-            fake_temp = faker.Faker(locale=locale)
-            # The bank provider is typically auto-loaded with the locale,
-            # so we no longer need fake_temp.add_provider(BankProvider)
+            # Inizializza Faker con la locale specifica SOLO per generare il formato IBAN
+            # Questo assicura che il formato generato sia quello del paese.
+            fake_iban_gen = faker.Faker(locale=locale)
+            # Il provider Bank è già incluso nelle locale che lo supportano
 
-            # Generate IBAN for the specific country code
-            # Use the keyword argument country_code_upper for clarity and robustness
-            nuovo_iban = fake_temp.iban(country_code=country_code_upper) 
-        except AttributeError:
-             # Handle cases where the 'iban' method might not be available for the chosen locale
-             print(f"Faker locale {locale} does not support IBAN generation directly or for country code {country_code_upper}. Skipping.")
-             tentativi = max_attempts # Exit loop if IBAN generation isn't possible
-             continue
+            # Genera l'IBAN. Passa il country_code_upper per sicurezza, anche se la locale dovrebbe bastare
+            # Alcune versioni di Faker potrebbero richiedere solo il locale, altre supportare country_code qui.
+            # Usiamo il locale primariamente.
+            # Controllo se il metodo iban esiste per la locale corrente
+            if not hasattr(fake_iban_gen, 'iban'):
+                 print(f"Locale '{locale}' non sembra supportare la generazione di IBAN. Impossibile procedere.")
+                 tentativi = max_attempts # Esce dal ciclo se non si può generare
+                 continue # Passa al prossimo tentativo (uscirà subito)
+
+            # Tenta di generare l'IBAN. Alcune locale potrebbero richiedere argomenti diversi o fallire.
+            try:
+                nuovo_iban = fake_iban_gen.iban() # Tenta prima senza country_code qui, basandosi sul locale
+            except Exception: # Se il metodo iban() senza argomenti fallisce, prova con country_code
+                 try:
+                     nuovo_iban = fake_iban_gen.iban(country_code=country_code_upper) # Prova a passare il country_code
+                     print(f"Generato IBAN con country_code: {nuovo_iban}") # Debug
+                 except Exception as e:
+                     print(f"Errore generazione IBAN per {country_code_upper} con locale {locale} e country_code: {e}") # Debug
+                     tentativi += 1
+                     continue # Passa al prossimo tentativo
+
+            # print(f"Tentativo {tentativi+1}: Generato raw IBAN {nuovo_iban} per {country_code_upper} con locale {locale}") # Debug
+
         except Exception as e:
-            # Catch any other errors during generation
-            print(f"Error generating raw IBAN for {country_code_upper} with locale {locale}: {e}")
+            # Logga o stampa errori durante la generazione con Faker
+            print(f"Errore generazione raw IBAN con Faker per {country_code_upper} e locale {locale}: {e}")
             tentativi += 1
-            continue # Skip this attempt
+            continue # Salta il tentativo corrente
 
+        # Ignora se l'IBAN generato è già in cache o nella lista esclusi
         if nuovo_iban in cache.get(country_code_upper, []) or nuovo_iban in esclusi:
-            # Check against potential existing entries in the cache list *before* validation
+            # print(f"IBAN {nuovo_iban} già in cache o escluso. Tentativo {tentativi+1}") # Debug
             tentativi += 1
             continue
 
-        # Perform external validation
+        # Valida l'IBAN generato tramite servizio esterno
+        # print(f"Validazione esterna IBAN {nuovo_iban}...") # Debug
         if iban_valido(nuovo_iban):
+            # print(f"Validazione riuscita per {nuovo_iban}. Aggiungo alla cache.") # Debug
             cache[country_code_upper].append(nuovo_iban)
-            # It's slightly more efficient to save the cache less frequently,
-            # maybe only after the loop or when adding, but saving inside the loop (up to 5 times per country)
-            # ensures you don't lose successful generations if the process is interrupted.
-            # Let's keep saving inside for robustness in this case.
-            salva_cache(cache) 
-            # We've found a valid one, we can potentially return early,
-            # but the loop continues until 5 are found or attempts run out.
-            # Returning here would mean the cache might not reach 5 IBANs.
-            # return nuovo_iban # Don't return here if you want to populate the cache up to 5
+            # Salva la cache ogni volta che si aggiunge un IBAN valido
+            salva_cache(cache)
+            # Se volevi restituire il primo valido trovato, potresti farlo qui
+            # ma l'obiettivo è popolare la cache fino a 5, quindi non ritorniamo ancora.
+            # valid_iban_trovato = nuovo_iban # Potrebbe memorizzare e restituire dopo il ciclo
+
+        # else:
+            # print(f"Validazione fallita per {nuovo_iban}. Tentativo {tentativi+1}") # Debug
+
 
         tentativi += 1
 
-    # After the loop, check if we have any cached IBANs to return
-    if cache.get(country_code_upper):
-         # Only return from cached IBANs that are NOT excluded
-         available_ibans = [iban for iban in cache[country_code_upper] if iban not in esclusi]
-         if available_ibans:
-              return random.choice(available_ibans)
-         # If the loop finished but no valid/non-excluded IBANs were found/generated
-         return "Non trovato" # Or None, depending on desired output
+    # Dopo il ciclo di generazione, scegli un IBAN dalla cache (ora popolata o meno)
+    # Assicurati di scegliere solo IBAN non esclusi (la cache è già stata pulita all'inizio, ma ricontrolliamo)
+    ibans_disponibili = [iban for iban in cache.get(country_code_upper, []) if iban not in esclusi]
 
-    # If the loop finished and no IBANs were added to the cache for this country
-    salva_cache(cache) # Save any changes made during the loop
-    return "Non trovato" # Indicates no valid IBAN was found/generated
+    if ibans_disponibili:
+         # print(f"Restituisco IBAN casuale dalla cache ({len(ibans_disponibili)} disponibili).") # Debug
+         return random.choice(ibans_disponibili)
+    else:
+         # print("Nessun IBAN valido trovato/disponibile per questo paese dopo i tentativi.") # Debug
+         # Se nessun IBAN valido è stato aggiunto alla cache o tutti sono esclusi
+         # Salva comunque la cache se ci sono stati tentativi di aggiunta
+         salva_cache(cache) 
+         return "Non trovato" # Indica che non è stato possibile ottenere un IBAN valido
 
 def escludi_iban(iban):
     esclusi = carica_esclusi()
     cache = carica_cache()
 
-    found_in_cache = False
-    for paese_code, lista in cache.items():
-        # Create a new list excluding the iban to avoid modifying the list while iterating (though removing works here)
-        new_lista = [item for item in lista if item != iban]
-        if len(new_lista) < len(lista): # If the iban was found and removed
-            cache[paese_code] = new_lista
-            found_in_cache = True
-            break # Assume an IBAN belongs to only one country cache
+    iban_found = False
+    # Itera su tutti i paesi nella cache
+    for paese_code in list(cache.keys()): # Itera su una copia delle chiavi se modifichi cache[paese_code]
+        # Crea una nuova lista escludendo l'IBAN da rimuovere
+        new_lista = [item for item in cache.get(paese_code, []) if item != iban]
+        # Se l'IBAN è stato trovato e rimosso dalla lista di questo paese
+        if len(new_lista) < len(cache.get(paese_code, [])):
+            cache[paese_code] = new_lista # Aggiorna la lista nella cache
+            iban_found = True # Segna che l'IBAN era in cache
+            # Non fare break qui se un IBAN potesse trovarsi nella cache di più paesi (non dovrebbe accadere con IBAN veri, ma con fittizi...)
+            # Tuttavia, per IBAN fittizi da un generatore con locale, dovrebbe essere legato a un paese, quindi break è ok.
+            break # Esci dal ciclo una volta trovato e rimosso
 
-    if found_in_cache:
-        esclusi.add(iban) # Add to excluded list only if it was in the cache
-        salva_cache(cache)
-        salva_esclusi(esclusi)
-    else:
-        # If the IBAN wasn't found in the cache, just add it to the excluded list anyway
-        # This prevents attempting to re-generate/use an IBAN that was manually typed and excluded
-        esclusi.add(iban)
-        salva_esclusi(esclusi)
-        print(f"IBAN {iban} not found in cache, added directly to excluded list.")
+    # Aggiunge l'IBAN alla lista degli esclusi
+    esclusi.add(iban)
+
+    # Salva entrambe le liste
+    salva_cache(cache)
+    salva_esclusi(esclusi)
+    # print(f"IBAN {iban} escluso. Presente in cache prima dell'esclusione: {iban_found}") # Debug
 
 
-def genera_dati(paese_nome, n=1, campi=None): # Renamed parameter to avoid confusion
+def genera_dati(paese_nome, n=1, campi=None): # Renamed parameter for clarity
+    # Mappature nome paese -> locale Faker e codice ISO
     localizzazioni = {
         'italia': 'it_IT',
         'francia': 'fr_FR',
         'germania': 'de_DE',
-        'lussemburgo': 'fr_LU' # Using fr_LU as per your original code
+        'lussemburgo': 'fr_LU' # Usiamo la locale francese per il Lussemburgo come nel codice originale
     }
     iso_codes = {
         'italia': 'IT',
@@ -210,52 +249,89 @@ def genera_dati(paese_nome, n=1, campi=None): # Renamed parameter to avoid confu
         'lussemburgo': 'LU'
     }
 
-    paese_lower = paese_nome.lower() # Use a new variable name
+    paese_lower = paese_nome.lower()
 
+    # Validazione del paese
     if paese_lower not in localizzazioni:
         raise ValueError(f"Paese non valido: {paese_nome}. Scegli tra Italia, Francia, Germania, Lussemburgo.")
 
-    # Initialize Faker with the locale for generating *other* profile data
-    fake = faker.Faker(localizzazioni[paese_lower])
-    # Providers used here (address, phone, person, date, internet, company) are
-    # typically loaded automatically with the locale, so add_provider isn't strictly necessary
-    # unless you have custom providers.
-    # fake.add_provider(address) # Not needed if locale is set
-    # fake.add_provider(phone_number) # Not needed if locale is set
-    # ... and so on for standard providers
+    # Inizializza Faker con la locale specifica per generare gli altri dati del profilo
+    # Questo assicura che nome, indirizzo, telefono ecc. siano appropriati per il paese.
+    try:
+        fake = faker.Faker(localizzazioni[paese_lower])
+        # Aggiungere provider standard è di solito ridondante se la locale è impostata,
+        # ma non fa male se vuoi essere esplicito o usi provider personalizzati.
+        # fake.add_provider(address)
+        # fake.add_provider(phone_number)
+        # fake.add_provider(person)
+        # fake.add_provider(date_time)
+        # fake.add_provider(internet)
+        # fake.add_provider(company)
+         # Assicurati che il provider Bank sia disponibile se IBAN è richiesto
+        if 'IBAN' in campi:
+             # Questo check può aiutare se una locale non ha il provider bank
+             if not hasattr(fake, 'iban'):
+                 print(f"Attenzione: La locale {localizzazioni[paese_lower]} non sembra supportare la generazione di IBAN direttamente. La generazione IBAN potrebbe fallire.")
+
+
+    except Exception as e:
+         print(f"Errore durante l'inizializzazione di Faker per locale {localizzazioni[paese_lower]}: {e}")
+         # Potrebbe essere necessario gestire questo errore, magari restituendo un dataframe vuoto o con un messaggio
+         return pd.DataFrame()
+
 
     dati = []
-    for _ in range(n):
+    # Genera i profili richiesti
+    for i in range(n): # Usa un contatore per debug se necessario
         profilo = {}
-        # Use .get() for fields that might not be available in all locales (like SSN, VAT)
-        # Or handle them with checks as you did. Let's stick to your check method for consistency.
+        # Aggiunge i campi richiesti al profilo
         if 'Nome' in campi: profilo['Nome'] = fake.first_name()
         if 'Cognome' in campi: profilo['Cognome'] = fake.last_name()
         if 'Data di Nascita' in campi:
-             # Use date_of_birth from the fake instance initialized with the locale
-             profilo['Data di Nascita'] = fake.date_of_birth(minimum_age=18, maximum_age=75).strftime('%d/%m/%Y')
-        if 'Indirizzo' in campi: profilo['Indirizzo'] = fake.address().replace("\n", ", ")
-        if 'Telefono' in campi: profilo['Telefono'] = fake.phone_number()
-        if 'Email' in campi: profilo['Email'] = fake.email()
-        if 'Codice Fiscale' in campi:
-             # Codice Fiscale is specific to Italy, keep your check
-             profilo['Codice Fiscale'] = fake.ssn() if paese_lower == 'italia' else 'N/A'
-        if 'Partita IVA' in campi:
-             # VAT ID provider method might vary by locale or availability
-             # Use getattr for safer access
-             profilo['Partita IVA'] = getattr(fake, 'vat_id', lambda: 'N/A')() if 'Partita IVA' in campi else 'N/A'
-             # Or your original check is also fine: profilo['Partita IVA'] = fake.vat_id() if hasattr(fake, 'vat_id') else 'N/A'
-        if 'IBAN' in campi:
-            # Pass the correct ISO code to the helper function
-            iban = ottieni_o_aggiungi_iban(iso_codes[paese_lower])
-            profilo['IBAN'] = iban if iban else "Non trovato" # ottieni_o_aggiungi_iban now returns "Non trovato" or an IBAN
+             # Assicura che date_of_birth funzioni per la locale scelta
+             try:
+                profilo['Data di Nascita'] = fake.date_of_birth(minimum_age=18, maximum_age=75).strftime('%d/%m/%Y')
+             except Exception: # Gestisce errori se la data di nascita non è generabile
+                profilo['Data di Nascita'] = 'N/A'
 
-        if 'Paese' in campi: profilo['Paese'] = paese_nome # Use the original name for display
+        if 'Indirizzo' in campi:
+             try:
+                profilo['Indirizzo'] = fake.address().replace("\n", ", ")
+             except Exception: # Gestisce errori se l'indirizzo non è generabile
+                profilo['Indirizzo'] = 'N/A'
+
+        if 'Telefono' in campi:
+             try:
+                profilo['Telefono'] = fake.phone_number()
+             except Exception: # Gestisce errori se il telefono non è generabile
+                profilo['Telefono'] = 'N/A'
+
+        if 'Email' in campi:
+             try:
+                profilo['Email'] = fake.email()
+             except Exception: # Gestisce errori se l'email non è generabile
+                profilo['Email'] = 'N/A'
+
+        # Campi specifici che potrebbero non esistere in tutte le locale
+        if 'Codice Fiscale' in campi:
+             # Questo campo è molto specifico per l'Italia
+             profilo['Codice Fiscale'] = fake.ssn() if paese_lower == 'italia' and hasattr(fake, 'ssn') else 'N/A'
+
+        if 'Partita IVA' in campi:
+             # Usa getattr per accedere al metodo in modo sicuro
+             # Chiama il metodo solo se esiste e se il campo è richiesto
+             profilo['Partita IVA'] = getattr(fake, 'vat_id', lambda: 'N/A')()
+
+
+        if 'IBAN' in campi:
+            # Chiama la funzione helper per ottenere o generare un IBAN valido
+            iban = ottieni_o_aggiungi_iban(iso_codes[paese_lower])
+            profilo['IBAN'] = iban # Ora non filtriamo più se è "Non trovato"
+
+        if 'Paese' in campi: profilo['Paese'] = paese_nome # Usa il nome del paese originale
 
         dati.append(profilo)
 
-    # Filter out profiles where IBAN was requested but not found
-    if 'IBAN' in campi:
-        dati = [p for p in dati if p.get('IBAN') != "Non trovato"]
-
+    # Ora ritorniamo il DataFrame completo, anche se alcuni IBAN sono "Non trovato"
+    # La notifica all'utente avverrà nell'app.py
     return pd.DataFrame(dati)
