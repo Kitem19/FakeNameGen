@@ -5,81 +5,99 @@ import requests
 import pandas as pd
 import streamlit as st
 from faker import Faker
-import xml.etree.ElementTree as ET
+import time
+import html
+import hashlib
+from streamlit_js_eval import streamlit_js_eval # <-- NUOVA LIBRERIA PER IL TASTO COPIA
 
-st.set_page_config(page_title="Fake Profile Generator (mail.tm full + copy email)", page_icon="📨", layout="centered")
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(page_title="Generatore di Profili Multi-Provider", page_icon="📫", layout="centered")
 
+# --- STILE CSS PERSONALIZZATO ---
+st.markdown("""
+<style>
+iframe { color-scheme: light; }
+.email-text-body { white-space: pre-wrap; font-family: monospace; color: #FAFAFA; background-color: rgba(40, 43, 54, 0.5); padding: 1rem; border-radius: 0.5rem; border: 1px solid rgba(250, 250, 250, 0.2); }
+.selectable-text-field { border: 1px solid rgba(250, 250, 250, 0.2); border-radius: 0.5rem; padding: 0.75rem; font-family: "Source Sans Pro", sans-serif; font-size: 1rem; background-color: #0E1117; color: #FAFAFA; width: 100%; margin-bottom: 1rem; box-sizing: border-box; }
+.copy-icon { cursor: pointer; opacity: 0.6; vertical-align: middle; margin-left: 8px; }
+.copy-icon:hover { opacity: 1; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- COSTANTI E DATI PREDEFINITI ---
 PREDEFINED_IBANS = {
     'IT': ['IT60X0542811101000000123456', 'IT12A0306912345100000067890'],
     'FR': ['FR1420041010050500013M02606', 'FR7630006000011234567890189'],
     'DE': ['DE89370400440532013000', 'DE02100100100006820101'],
     'LU': ['LU280019400644750000', 'LU120010001234567891']
 }
+USER_AGENT_HEADER = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+TEMPMAIL_DOMAINS = ["greencafe24.com", "chacuo.net", "fexpost.com"]
 
-def get_mailtm_domains():
+# ==============================================================================
+#                      FUNZIONI API PER OGNI PROVIDER
+# ==============================================================================
+def create_guerrillamail_account():
     try:
-        r = requests.get("https://api.mail.tm/domains", headers={'Accept': 'application/xml'})
-        r.raise_for_status()
-        xml_root = ET.fromstring(r.text)
-        return list({el.text for el in xml_root.findall(".//domain")})
-    except:
-        return []
+        r = requests.get("https://api.guerrillamail.com/ajax.php?f=get_email_address", headers=USER_AGENT_HEADER)
+        r.raise_for_status(); data = r.json()
+        return {"address": data['email_addr'], "sid_token": data['sid_token'], "provider": "Guerrilla Mail"}
+    except Exception as e: st.error(f"Errore Guerrilla Mail: {e}"); return None
 
-def create_mailtm_account(domain):
-    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    password = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
-    address = f"{username}@{domain}"
-    data = {"address": address, "password": password}
-    try:
-        requests.post("https://api.mail.tm/accounts", json=data).raise_for_status()
-        token_resp = requests.post("https://api.mail.tm/token", json=data)
-        token_resp.raise_for_status()
-        return {"address": address, "token": token_resp.json()['token']}
-    except:
-        return None
+def inbox_guerrillamail(info, auto_refresh_placeholder):
+    st.subheader(f"📬 Inbox per: `{info['address']}`")
+    col1, col2, col3 = st.columns([3, 1, 4])
+    with col1:
+        if st.button("🔁 Controlla messaggi"): st.session_state.auto_refresh = False; st.rerun()
+    with col2:
+        if st.button("🔄 Auto-Refresh"):
+            st.session_state.auto_refresh = True
+            st.session_state.refresh_stop_time = time.time() + 120 # 2 minuti
+            st.session_state.initial_message_count = len(st.session_state.get('messages', []))
 
-def inbox_mailtm(address, token):
-    st.subheader(f"📬 Inbox per [{address}](mailto:{address})")
-
-    # Copy-to-clipboard HTML button (safe)
-    st.markdown(f'''
-        <input type="text" value="{address}" id="copyEmail" style="position:absolute; left:-1000px;">
-        <button onclick="navigator.clipboard.writeText(document.getElementById('copyEmail').value)">Copia indirizzo email</button>
-        ''', unsafe_allow_html=True)
-
-    if st.button("🔁 Controlla inbox (mail.tm)"):
-        headers = {'Authorization': f'Bearer {token}'}
+    if st.session_state.get('auto_refresh', False):
         try:
-            r = requests.get("https://api.mail.tm/messages", headers=headers)
-            messages = r.json().get("hydra:member", [])
-            if not messages:
-                st.info("📭 Nessun messaggio trovato.")
-            for m in messages:
-                msg_id = m["id"]
-                detail_resp = requests.get(f"https://api.mail.tm/messages/{msg_id}", headers=headers)
-                msg = detail_resp.json()
-                with st.expander(f"✉️ {msg.get('from',{}).get('address')} | {msg.get('subject')}"):
-                    st.markdown(f"**Oggetto:** {msg.get('subject', 'N/A')}")
-                    st.markdown(f"**Mittente:** {msg.get('from',{}).get('address', 'N/A')}")
-                    st.markdown(f"**Data:** {msg.get('createdAt', '')}")
-                    st.markdown("---")
-                    html_content = msg.get("html")
-                    if html_content and isinstance(html_content, str):
-                        st.markdown("**Contenuto (HTML):**", unsafe_allow_html=True)
-                        st.components.v1.html(html_content, height=300, scrolling=True)
-                    elif msg.get("text"):
-                        st.markdown("**Contenuto (Testo):**")
-                        st.code(msg["text"])
-                    else:
-                        st.markdown("**Anteprima:**")
-                        st.code(msg.get("intro", "Nessun contenuto."))
-                    if msg.get("attachments"):
-                        st.markdown("**📎 Allegati:**")
-                        for att in msg["attachments"]:
-                            st.markdown(f"- [{att.get('filename')}]({att.get('downloadUrl')})")
-        except Exception as e:
-            st.warning(f"Errore nella lettura: {e}")
+            if time.time() > st.session_state.refresh_stop_time:
+                auto_refresh_placeholder.warning("Auto-Refresh terminato (2 minuti).")
+                st.session_state.auto_refresh = False
+            else:
+                remaining = int(st.session_state.refresh_stop_time - time.time())
+                auto_refresh_placeholder.info(f"Ricerca automatica attiva... Tempo rimasto: {remaining}s")
+                r = requests.get(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0&sid_token={info['sid_token']}", headers=USER_AGENT_HEADER)
+                r.raise_for_status(); st.session_state.messages = r.json().get("list", [])
+                if len(st.session_state.messages) > st.session_state.initial_message_count:
+                    auto_refresh_placeholder.success("Nuovo messaggio trovato! Auto-refresh interrotto.")
+                    st.session_state.auto_refresh = False
+                else: time.sleep(10)
+                st.rerun()
+        except Exception: st.session_state.auto_refresh = False
+    
+    if 'messages' in st.session_state and st.session_state.messages is not None:
+        messages = st.session_state.messages
+        if not messages: st.info("📭 La casella di posta è vuota.")
+        else:
+            st.success(f"Trovati {len(messages)} messaggi.")
+            for m in reversed(messages):
+                with st.expander(f"✉️ **Da:** {m['mail_from']} | **Oggetto:** {m['mail_subject']}"):
+                    email_body = requests.get(f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={m['mail_id']}&sid_token={info['sid_token']}", headers=USER_AGENT_HEADER).json().get('mail_body', '<i>Corpo non disponibile.</i>')
+                    st.components.v1.html(email_body, height=400, scrolling=True)
 
+def create_mailtm_account():
+    domain = random.choice(TEMPMAIL_DOMAINS)
+    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+    address = f"{username}@{domain}"
+    return {"address": address, "provider": "Mail.tm"}
+
+def inbox_mailtm(info, auto_refresh_placeholder):
+    st.subheader(f"📬 Inbox per: `{info['address']}`")
+    # Logica per l'inbox di mail.tm (inclusa la logica di auto-refresh se la implementi)
+    if st.button("🔁 Controlla messaggi (Mail.tm)"):
+        # Qui andrebbe la logica per controllare la posta per mail.tm
+        st.info("Funzionalità di inbox per Mail.tm da implementare.")
+
+# ==============================================================================
+#                      LOGICA PRINCIPALE E UI
+# ==============================================================================
 def get_next_iban(cc):
     cc = cc.upper()
     if 'iban_state' not in st.session_state: st.session_state.iban_state = {}
@@ -89,59 +107,71 @@ def get_next_iban(cc):
     st.session_state.iban_state[cc]['index'] += 1
     return st.session_state.iban_state[cc]['list'][st.session_state.iban_state[cc]['index'] - 1]
 
-def generate_profile(country, extra_fields, selected_domain):
+def generate_profile(country, extra_fields, provider):
     locs = {'Italia': 'it_IT', 'Francia': 'fr_FR', 'Germania': 'de_DE', 'Lussemburgo': 'fr_LU'}
     codes = {'Italia': 'IT', 'Francia': 'FR', 'Germania': 'DE', 'Lussemburgo': 'LU'}
-    locale, code = locs[country], codes[country]
-    fake = Faker(locale)
-    p = {
-        'Nome': fake.first_name(),
-        'Cognome': fake.last_name(),
-        'Data di Nascita': fake.date_of_birth(minimum_age=18, maximum_age=80).strftime('%d/%m/%Y'),
-        'Indirizzo': fake.address().replace("\n", ", "),
-        'IBAN': get_next_iban(code),
-        'Paese': country
-    }
-
+    locale, code = locs[country], codes[country]; fake = Faker(locale)
+    p = {'Nome': fake.first_name(), 'Cognome': fake.last_name(), 'Data di Nascita': fake.date_of_birth(minimum_age=18, maximum_age=80).strftime('%d/%m/%Y'), 'Indirizzo': fake.address().replace("\n", ", "), 'IBAN': get_next_iban(code), 'Paese': country}
     if 'Email' in extra_fields:
-        result = create_mailtm_account(selected_domain)
+        if provider == "Guerrilla Mail": result = create_guerrillamail_account()
+        elif provider == "Mail.tm": result = create_mailtm_account()
         st.session_state.email_info = result
-        p["Email"] = result["address"] if result else "Errore"
-
+        p["Email"] = result["address"] if result else "Creazione email fallita"
     if 'Telefono' in extra_fields: p['Telefono'] = fake.phone_number()
     if 'Codice Fiscale' in extra_fields: p['Codice Fiscale'] = fake.ssn() if locale == 'it_IT' else 'N/A'
     if 'Partita IVA' in extra_fields: p['Partita IVA'] = fake.vat_id() if hasattr(fake, 'vat_id') else 'N/A'
     return pd.DataFrame([p])
 
-# ---------------- UI ---------------- #
+def display_profile_card(profile_data):
+    st.subheader("📄 Dettagli del Profilo Generato")
+    def render_field(label, value, copy_button=False):
+        col1, col2 = st.columns([10, 1])
+        with col1: st.markdown(f"**{label}**"); st.markdown(f"<div class='selectable-text-field'>{value}</div>", unsafe_allow_html=True)
+        if copy_button:
+            with col2: st.markdown("<br>", unsafe_allow_html=True); st.button("📋", key=f"copy_{label}", on_click=streamlit_js_eval, args=[f"navigator.clipboard.writeText('{value}')"], help=f"Copia {label}")
+    
+    col1, col2 = st.columns(2)
+    with col1: render_field("Nome", profile_data.get("Nome", "N/A"))
+    with col2: render_field("Cognome", profile_data.get("Cognome", "N/A"))
+    render_field("Data di Nascita", profile_data.get("Data di Nascita", "N/A"))
+    render_field("Indirizzo", profile_data.get("Indirizzo", "N/A"))
+    render_field("IBAN", profile_data.get("IBAN", "N/A"), copy_button=True)
+    if "Telefono" in profile_data: render_field("Telefono", profile_data.get("Telefono"), copy_button=True)
+    if "Codice Fiscale" in profile_data: render_field("Codice Fiscale", profile_data.get("Codice Fiscale"), copy_button=True)
+    if "Partita IVA" in profile_data: render_field("Partita IVA", profile_data.get("Partita IVA"), copy_button=True)
+    if "Email" in profile_data and "fallita" not in profile_data["Email"]:
+        email = profile_data["Email"]
+        st.markdown(f"**Email:** [{email}](mailto:{email}) <span class='copy-icon' onclick=\"navigator.clipboard.writeText('{email}')\" title='Copia email'>📋</span>", unsafe_allow_html=True)
+    st.markdown("---")
 
-st.title("📨 Generatore di Profili Fake (mail.tm - HTML completo + copia email)")
+st.title("📫 Generatore di Profili Multi-Provider")
+st.markdown("Genera profili fittizi completi di email temporanee funzionanti.")
 
-if 'final_df' not in st.session_state: st.session_state.final_df = None
-if 'email_info' not in st.session_state: st.session_state.email_info = None
+# Inizializzazione dello stato
+for key in ['final_df', 'email_info', 'messages', 'show_success', 'auto_refresh']:
+    if key not in st.session_state: st.session_state[key] = None if key != 'show_success' else False
 
 with st.sidebar:
     st.header("⚙️ Opzioni")
     country = st.selectbox("Paese", ["Italia", "Francia", "Germania", "Lussemburgo"])
     n = st.number_input("Numero di profili", 1, 25, 1)
     fields = st.multiselect("Campi aggiuntivi", ["Email", "Telefono", "Codice Fiscale", "Partita IVA"], default=["Email"])
+    provider = st.selectbox("Provider Email", ["Guerrilla Mail", "Mail.tm"])
 
-    all_domains = get_mailtm_domains()
-    if not all_domains:
-        st.error("⚠️ Nessun dominio disponibile da mail.tm")
-        st.stop()
-    selected_domain = st.selectbox("Dominio mail.tm", all_domains)
-
-    if st.button("🚀 Genera Profili"):
-        dfs = [generate_profile(country, fields, selected_domain) for _ in range(n)]
-        st.session_state.final_df = pd.concat(dfs, ignore_index=True)
+    if st.button("🚀 Genera Profili", type="primary"):
+        with st.spinner("Generazione in corso..."):
+            dfs = [generate_profile(country, fields, provider) for _ in range(n)]
+        st.session_state.final_df = pd.concat([df for df in dfs if not df.empty], ignore_index=True)
+        st.session_state.messages = None; st.session_state.show_success = True; st.session_state.auto_refresh = False
 
 if st.session_state.final_df is not None:
-    st.success(f"✅ Generati {len(st.session_state.final_df)} profili.")
-    st.dataframe(st.session_state.final_df)
+    if st.session_state.show_success: st.success(f"✅ Generati {len(st.session_state.final_df)} profili."); st.session_state.show_success = False
+    if len(st.session_state.final_df) == 1: display_profile_card(st.session_state.final_df.iloc[0])
+    else: st.dataframe(st.session_state.final_df)
     csv = st.session_state.final_df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Scarica CSV", csv, "profili.csv", "text/csv")
-
     info = st.session_state.email_info
-    if 'Email' in st.session_state.final_df.columns and info:
-        inbox_mailtm(info["address"], info["token"])
+    if 'Email' in st.session_state.final_df.columns and info and "fallita" not in info.get("address", "fallita"):
+        auto_refresh_placeholder = st.empty()
+        if info['provider'] == "Guerrilla Mail": inbox_guerrillamail(info, auto_refresh_placeholder)
+        elif info['provider'] == "Mail.tm": inbox_mailtm(info, auto_refresh_placeholder)
