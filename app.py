@@ -56,12 +56,20 @@ def inbox_guerrillamail(info, auto_refresh_placeholder):
     st.subheader(f"📬 Inbox per: `{info['address']}`")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔁 Controlla messaggi"): st.session_state.auto_refresh = False; st.rerun()
+        if st.button("🔁 Controlla messaggi"):
+            st.session_state.auto_refresh = False
+            # Esegui il controllo manuale dei messaggi
+            with st.spinner("Recupero messaggi..."):
+                r = requests.get(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0&sid_token={info['sid_token']}", headers=USER_AGENT_HEADER)
+                r.raise_for_status(); st.session_state.messages = r.json().get("list", [])
+            st.rerun()
     with col2:
         if st.button("🔄 Auto-Refresh (2 min)"):
-            st.session_state.auto_refresh = True; st.session_state.refresh_stop_time = time.time() + 120
+            st.session_state.auto_refresh = True
+            st.session_state.refresh_stop_time = time.time() + 120
             st.session_state.initial_message_count = len(st.session_state.get('messages') or [])
             st.rerun()
+
     if st.session_state.get('auto_refresh'):
         if time.time() > st.session_state.refresh_stop_time:
             auto_refresh_placeholder.warning("Auto-Refresh terminato."); st.session_state.auto_refresh = False; st.rerun()
@@ -72,7 +80,9 @@ def inbox_guerrillamail(info, auto_refresh_placeholder):
             r.raise_for_status(); st.session_state.messages = r.json().get("list", [])
             if len(st.session_state.messages) > st.session_state.initial_message_count:
                 auto_refresh_placeholder.success("Nuovo messaggio trovato! Auto-refresh interrotto."); st.session_state.auto_refresh = False; st.rerun()
-            else: time.sleep(10); st.rerun()
+            else:
+                time.sleep(10); st.rerun()
+    
     if 'messages' in st.session_state and st.session_state.messages is not None:
         messages = st.session_state.messages
         if not messages: st.info("📭 La casella di posta è vuota.")
@@ -93,17 +103,28 @@ def create_mailtm_account():
 def inbox_mailtm(info, auto_refresh_placeholder):
     st.subheader(f"📬 Inbox per: `{info['address']}`")
     api_key = st.secrets.get("rapidapi", {}).get("key")
-    if not api_key: st.error("Chiave API per Temp-Mail.org non configurata!"); return
+    if not api_key: st.error("Chiave API per Mail.tm (RapidAPI) non configurata nei Secrets di Streamlit!"); return
     url = f"https://privatix-temp-mail-v1.p.rapidapi.com/request/mail/id/{hashlib.md5(info['address'].encode('utf-8')).hexdigest()}/"
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": "privatix-temp-mail-v1.p.rapidapi.com"}
-    if st.button("🔁 Controlla messaggi (Mail.tm)"):
-        with st.spinner("Recupero messaggi..."):
-            try:
-                r = requests.get(url, headers=headers); r.raise_for_status()
-                messages = r.json()
-                if not isinstance(messages, list): st.error(f"Risposta inattesa dall'API: {messages}"); return
-                st.session_state.messages = messages
-            except Exception as e: st.error(f"Errore lettura posta: {e}"); st.session_state.messages = []
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔁 Controlla messaggi (Mail.tm)"): st.session_state.auto_refresh = False; 
+    with col2:
+        if st.button("🔄 Auto-Refresh (2 min)"): st.session_state.auto_refresh = True
+    
+    if st.session_state.auto_refresh:
+        # La logica di auto-refresh per Mail.tm può essere aggiunta qui, simile a quella di Guerrilla Mail
+        auto_refresh_placeholder.info("Auto-refresh per Mail.tm non ancora implementato.")
+        st.session_state.auto_refresh = False # Disattiva per ora
+    
+    with st.spinner("Recupero messaggi..."):
+        try:
+            r = requests.get(url, headers=headers); r.raise_for_status()
+            messages = r.json()
+            st.session_state.messages = messages if isinstance(messages, list) else []
+        except Exception as e: st.error(f"Errore lettura posta: {e}"); st.session_state.messages = []
+    
     if 'messages' in st.session_state and st.session_state.messages is not None:
         messages = st.session_state.messages
         if not messages: st.info("📭 La casella di posta è vuota.")
@@ -146,23 +167,33 @@ def display_profile_card(profile_data):
     def render_field(label, value):
         st.markdown(f"**{label}**")
         col1, col2 = st.columns([0.9, 0.1])
-        with col1: st.markdown(f"<div class='selectable-text-field'>{value}</div>", unsafe_allow_html=True)
+        with col1:
+            st.markdown(f"<div class='selectable-text-field'>{value}</div>", unsafe_allow_html=True)
         with col2:
             if st.button("📋", key=f"copy_{label.lower()}", help=f"Copia {label}"):
                 streamlit_js_eval(js_expressions=f"navigator.clipboard.writeText('{value}')")
-                st.toast(f"{label} copiato!")
+                st.toast(f"'{value}' copiato!")
+    
     col1, col2 = st.columns(2)
     with col1: render_field("Nome", profile_data.get("Nome", "N/A"))
     with col2: render_field("Cognome", profile_data.get("Cognome", "N/A"))
+    
+    email = profile_data.get("Email")
+    if email and "fallita" not in email:
+        st.markdown(f"**Email**")
+        col1, col2 = st.columns([0.9, 0.1])
+        with col1: st.markdown(f"<div class='selectable-text-field'><a href='mailto:{email}'>{email}</a></div>", unsafe_allow_html=True)
+        with col2:
+            if st.button("📋", key="copy_email", help="Copia Email"):
+                streamlit_js_eval(js_expressions=f"navigator.clipboard.writeText('{email}')")
+                st.toast(f"Email '{email}' copiata!")
+
     render_field("Data di Nascita", profile_data.get("Data di Nascita", "N/A"))
     render_field("Indirizzo", profile_data.get("Indirizzo", "N/A"))
     render_field("IBAN", profile_data.get("IBAN", "N/A"))
     if "Telefono" in profile_data: render_field("Telefono", profile_data.get("Telefono"))
     if "Codice Fiscale" in profile_data: render_field("Codice Fiscale", profile_data.get("Codice Fiscale"))
     if "Partita IVA" in profile_data: render_field("Partita IVA", profile_data.get("Partita IVA"))
-    if "Email" in profile_data and "fallita" not in profile_data["Email"]:
-        email = profile_data["Email"]
-        st.markdown(f"**Email:** [{email}](mailto:{email})")
     st.markdown("---")
 
 st.title("📫 Generatore di Profili Multi-Provider")
@@ -177,11 +208,12 @@ with st.sidebar:
     n = st.number_input("Numero di profili", 1, 25, 1)
     fields = st.multiselect("Campi aggiuntivi", ["Email", "Telefono", "Codice Fiscale", "Partita IVA"], default=["Email"])
     provider = st.selectbox("Provider Email", ["Guerrilla Mail", "Mail.tm (richiede chiave API)"])
-
+    
     is_button_disabled = False
     if provider == "Mail.tm (richiede chiave API)":
         if not st.secrets.get("rapidapi", {}).get("key"):
-            st.error("Per usare Mail.tm, imposta la chiave API nei Secrets."); is_button_disabled = True
+            st.error("Per usare Mail.tm, imposta la chiave API nei Secrets di Streamlit.")
+            is_button_disabled = True
     
     if st.button("🚀 Genera Profili", type="primary", disabled=is_button_disabled):
         with st.spinner("Generazione in corso..."):
@@ -193,11 +225,12 @@ if st.session_state.final_df is not None:
     if st.session_state.show_success: st.success(f"✅ Generati {len(st.session_state.final_df)} profili."); st.session_state.show_success = False
     if len(st.session_state.final_df) == 1: display_profile_card(st.session_state.final_df.iloc[0])
     else: st.dataframe(st.session_state.final_df)
+    
     csv = st.session_state.final_df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Scarica CSV", csv, "profili.csv", "text/csv")
+
     info = st.session_state.email_info
     if 'Email' in st.session_state.final_df.columns and info and "fallita" not in info.get("address", "fallita"):
         auto_refresh_placeholder = st.empty()
-        # FIX: Corretto il mapping tra nome UI e nome provider
         if info['provider'] == "Guerrilla Mail": inbox_guerrillamail(info, auto_refresh_placeholder)
         elif info['provider'] == "Mail.tm": inbox_mailtm(info, auto_refresh_placeholder)
