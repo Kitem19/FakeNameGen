@@ -1,3 +1,44 @@
+
+def get_mailtm_messages(token):
+    try:
+        headers = {"Authorization": f"Bearer {token}"}
+        r = requests.get("https://api.mail.tm/messages", headers=headers)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("hydra:member", [])
+    except:
+        return []
+
+
+
+def create_mailtm_account(domain):
+    username = ''.join(random.choices(string.ascii_lowercase, k=10))
+    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+    email = f"{username}@{domain}"
+    payload = {"address": email, "password": password}
+    try:
+        r = requests.post("https://api.mail.tm/accounts", json=payload)
+        r.raise_for_status()
+        # Ottieni token
+        r = requests.post("https://api.mail.tm/token", json=payload)
+        token = r.json()["token"]
+        return username, password, token
+    except:
+        return username, password, ""
+
+
+
+def get_mailtm_domains():
+    import xml.etree.ElementTree as ET
+    try:
+        r = requests.get("https://api.mail.tm/domains", headers={'Accept': 'application/xml'})
+        r.raise_for_status()
+        xml_root = ET.fromstring(r.text)
+        return list(el.text for el in xml_root.findall(".//domain"))
+    except:
+        return []
+
+
 # -*- coding: utf-8 -*-
 import random
 import string
