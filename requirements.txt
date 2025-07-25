@@ -6,3 +6,4 @@ openpyxl
 pydrive
 beautifulsoup4
 lxml 
+streamlit-js-eval
