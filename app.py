@@ -70,6 +70,23 @@ iframe {
     opacity: 0.7;
     background-color: rgba(250, 250, 250, 0.1);
 }
+/* Stile per il bottone di copia tabella */
+#copy-table-btn {
+    background-color: #262730;
+    color: #FAFAFA;
+    border: 1px solid rgba(250, 250, 250, 0.2);
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 1rem;
+}
+#copy-table-btn:hover {
+    border-color: #00A36C;
+}
+#copy-table-btn:active {
+    background-color: #00A36C;
+}
 </style>
 <script>
 // Funzione di copia robusta che funziona su HTTP e HTTPS
@@ -90,12 +107,29 @@ function copyToClipboard(element, text) {
         setTimeout(function() {
             element.innerText = originalText;
             element.style.color = ""; // Ripristina colore
-        }, 1500); // Cambia di nuovo dopo 1.5 secondi
+        }, 1500);
     } catch (err) {
         alert("Errore: impossibile copiare l'indirizzo.");
     }
-
     document.body.removeChild(tempInput);
+}
+
+// Funzione per copiare la tabella
+function copyTableToClipboard() {
+    var textarea = document.getElementById('table-data');
+    textarea.select();
+    textarea.setSelectionRange(0, 99999);
+    try {
+        document.execCommand('copy');
+        var btn = document.getElementById('copy-table-btn');
+        var originalText = btn.innerText;
+        btn.innerText = 'Copiato!';
+        setTimeout(function(){
+            btn.innerText = originalText;
+        }, 2000);
+    } catch (err) {
+        alert('Errore: impossibile copiare la tabella.');
+    }
 }
 </script>
 """, unsafe_allow_html=True)
@@ -131,7 +165,6 @@ def get_mailtm_domains():
     try:
         r = requests.get("https://api.mail.tm/domains", headers=USER_AGENT_HEADER, timeout=10)
         r.raise_for_status()
-        # FIX: L'API restituisce un dizionario, la lista è nella chiave 'hydra:member'
         return [domain['domain'] for domain in r.json().get('hydra:member', [])]
     except requests.exceptions.RequestException as e:
         print(f"Could not fetch Mail.tm domains: {e}")
@@ -163,7 +196,6 @@ def fetch_messages(info):
             headers = {**USER_AGENT_HEADER, 'Authorization': f'Bearer {info["token"]}'}
             r = requests.get("https://api.mail.tm/messages", headers=headers, timeout=10)
             r.raise_for_status()
-            # FIX: Anche qui, la lista dei messaggi è in 'hydra:member'
             return r.json().get('hydra:member', [])
     except Exception as e:
         st.warning(f"Errore durante il recupero dei messaggi: {e}")
@@ -196,10 +228,8 @@ def generate_profile(country, extra_fields, email_service, mailtm_domain=None):
     }
     
     if 'Email' in extra_fields:
-        if email_service == "Guerrilla Mail":
-            result = create_guerrillamail_account()
-        else:
-            result = create_mailtm_account(mailtm_domain)
+        if email_service == "Guerrilla Mail": result = create_guerrillamail_account()
+        else: result = create_mailtm_account(mailtm_domain)
         st.session_state.email_info = result
         p["Email"] = result["address"] if result else "Creazione email fallita"
 
@@ -275,8 +305,7 @@ def display_inbox(info):
                     with st.spinner("Caricamento corpo..."):
                         full_email_resp = requests.get(f"https://api.guerrillamail.com/ajax.php?f=fetch_email&email_id={m['mail_id']}&sid_token={info['sid_token']}", headers=USER_AGENT_HEADER)
                         full_email_data = full_email_resp.json()
-                    timestamp = int(m['mail_timestamp'])
-                    date_str = time.strftime('%d/%m/%Y %H:%M:%S', time.localtime(timestamp))
+                    timestamp = int(m['mail_timestamp']); date_str = time.strftime('%d/%m/%Y %H:%M:%S', time.localtime(timestamp))
                     st.markdown(f"**Data:** {date_str}"); st.markdown("---")
                     email_body_html = full_email_data.get('mail_body')
                     if "<html>" in email_body_html.lower() or "<div>" in email_body_html.lower():
@@ -289,13 +318,11 @@ def display_inbox(info):
                 with st.spinner(f"Carico dettagli messaggio ID: {m.get('id', '')[:10]}"):
                     headers = {**USER_AGENT_HEADER, 'Authorization': f'Bearer {info["token"]}'}
                     detail_resp = requests.get(f"https://api.mail.tm/messages/{m.get('id')}", headers=headers).json()
-                
                 sender = detail_resp.get('from', {}).get('address', 'N/A')
                 subject = detail_resp.get('subject', 'N/A')
                 with st.expander(f"✉️ **Da:** {sender} | **Oggetto:** {subject}"):
                     date_str = detail_resp.get('createdAt', 'N/A')
-                    st.markdown(f"**Data:** {date_str}")
-                    st.markdown("---")
+                    st.markdown(f"**Data:** {date_str}"); st.markdown("---")
                     html_content = detail_resp.get("html")
                     if html_content and isinstance(html_content, list) and html_content:
                         st.components.v1.html(html_content[0], height=400, scrolling=True)
@@ -345,8 +372,7 @@ with st.sidebar:
             with st.spinner("Generazione in corso..."):
                 dfs = [generate_profile(country, fields, email_service, mailtm_domain_selection) for _ in range(n)]
             st.session_state.final_df = pd.concat([df for df in dfs if not df.empty], ignore_index=True)
-            st.session_state.messages = None
-            st.session_state.show_success = True
+            st.session_state.messages = None; st.session_state.show_success = True
             st.rerun()
 
 # --- AREA PRINCIPALE ---
@@ -359,7 +385,17 @@ if st.session_state.final_df is not None:
         display_profile_card(st.session_state.final_df.iloc[0])
     else:
         st.dataframe(st.session_state.final_df)
+        
+        # --- NUOVO: Pulsante per copiare la tabella ---
+        df_for_clipboard = st.session_state.final_df.to_csv(index=False, sep='\t')
+        escaped_df = html.escape(df_for_clipboard)
+        st.markdown(f"""
+        <textarea readonly id="table-data" style="position:absolute;left:-1000px;">{escaped_df}</textarea>
+        <button id="copy-table-btn" onclick="copyTableToClipboard()">📋 Copia dati tabella</button>
+        """, unsafe_allow_html=True)
     
+    st.divider()
+
     csv = st.session_state.final_df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Scarica CSV", csv, "profili.csv", "text/csv")
 
