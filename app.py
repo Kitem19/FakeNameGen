@@ -56,18 +56,17 @@ def inbox_guerrillamail(info, auto_refresh_placeholder):
     st.subheader(f"📬 Inbox per: `{info['address']}`")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔁 Controlla messaggi"):
+        if st.button("🔁 Controlla messaggi", key="check_guerrilla"):
             st.session_state.auto_refresh = False
             with st.spinner("Recupero messaggi..."):
                 r = requests.get(f"https://api.guerrillamail.com/ajax.php?f=check_email&seq=0&sid_token={info['sid_token']}", headers=USER_AGENT_HEADER)
                 r.raise_for_status(); st.session_state.messages = r.json().get("list", [])
             st.rerun()
     with col2:
-        if st.button("🔄 Auto-Refresh (2 min)"):
+        if st.button("🔄 Auto-Refresh (2 min)", key="auto_guerrilla"):
             st.session_state.auto_refresh = True; st.session_state.refresh_stop_time = time.time() + 120
             st.session_state.initial_message_count = len(st.session_state.get('messages') or [])
             st.rerun()
-
     if st.session_state.get('auto_refresh'):
         if time.time() > st.session_state.refresh_stop_time:
             auto_refresh_placeholder.warning("Auto-Refresh terminato."); st.session_state.auto_refresh = False; st.rerun()
@@ -78,9 +77,7 @@ def inbox_guerrillamail(info, auto_refresh_placeholder):
             r.raise_for_status(); st.session_state.messages = r.json().get("list", [])
             if len(st.session_state.messages) > st.session_state.initial_message_count:
                 auto_refresh_placeholder.success("Nuovo messaggio trovato! Auto-refresh interrotto."); st.session_state.auto_refresh = False; st.rerun()
-            else:
-                time.sleep(10); st.rerun()
-    
+            else: time.sleep(10); st.rerun()
     if 'messages' in st.session_state and st.session_state.messages is not None:
         messages = st.session_state.messages
         if not messages: st.info("📭 La casella di posta è vuota.")
@@ -92,33 +89,31 @@ def inbox_guerrillamail(info, auto_refresh_placeholder):
                     if "<html>" in email_body.lower() or "<div>" in email_body.lower(): st.components.v1.html(email_body, height=400, scrolling=True)
                     else: st.markdown(f"<div class='email-text-body'>{html.unescape(email_body)}</div>", unsafe_allow_html=True)
 
-def create_mailtm_account():
+def create_tempmail_account():
     domain = random.choice(TEMPMAIL_DOMAINS)
     username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
     address = f"{username}@{domain}"
-    return {"address": address, "provider": "Mail.tm"}
+    return {"address": address, "provider": "Temp-Mail.org"}
 
-def inbox_mailtm(info, auto_refresh_placeholder):
+def inbox_tempmail(info, auto_refresh_placeholder):
     st.subheader(f"📬 Inbox per: `{info['address']}`")
     api_key = st.secrets.get("rapidapi", {}).get("key")
-    if not api_key: st.error("Chiave API per Mail.tm (RapidAPI) non configurata nei Secrets di Streamlit!"); return
+    if not api_key: st.error("Chiave API per Temp-Mail.org non configurata nei Secrets di Streamlit!"); return
     url = f"https://privatix-temp-mail-v1.p.rapidapi.com/request/mail/id/{hashlib.md5(info['address'].encode('utf-8')).hexdigest()}/"
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": "privatix-temp-mail-v1.p.rapidapi.com"}
-    
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔁 Controlla messaggi (Mail.tm)"):
+        if st.button("🔁 Controlla messaggi (Temp-Mail.org)", key="check_tempmail"):
             st.session_state.auto_refresh = False
             with st.spinner("Recupero messaggi..."):
                 r = requests.get(url, headers=headers); r.raise_for_status()
                 messages = r.json(); st.session_state.messages = messages if isinstance(messages, list) else []
             st.rerun()
     with col2:
-        if st.button("🔄 Auto-Refresh (2 min)"):
+        if st.button("🔄 Auto-Refresh (2 min)", key="auto_tempmail"):
             st.session_state.auto_refresh = True; st.session_state.refresh_stop_time = time.time() + 120
             st.session_state.initial_message_count = len(st.session_state.get('messages') or [])
             st.rerun()
-            
     if st.session_state.get('auto_refresh'):
         if time.time() > st.session_state.refresh_stop_time:
             auto_refresh_placeholder.warning("Auto-Refresh terminato."); st.session_state.auto_refresh = False; st.rerun()
@@ -129,9 +124,7 @@ def inbox_mailtm(info, auto_refresh_placeholder):
             messages = r.json(); st.session_state.messages = messages if isinstance(messages, list) else st.session_state.messages
             if len(st.session_state.messages) > st.session_state.initial_message_count:
                 auto_refresh_placeholder.success("Nuovo messaggio trovato! Auto-refresh interrotto."); st.session_state.auto_refresh = False; st.rerun()
-            else:
-                time.sleep(10); st.rerun()
-
+            else: time.sleep(10); st.rerun()
     if 'messages' in st.session_state and st.session_state.messages is not None:
         messages = st.session_state.messages
         if not messages: st.info("📭 La casella di posta è vuota.")
@@ -145,6 +138,23 @@ def inbox_mailtm(info, auto_refresh_placeholder):
 # ==============================================================================
 #                      LOGICA PRINCIPALE E UI
 # ==============================================================================
+CREATE_FUNCTIONS = {"Guerrilla Mail": create_guerrillamail_account, "Temp-Mail.org": create_tempmail_account}
+INBOX_FUNCTIONS = {"Guerrilla Mail": inbox_guerrillamail, "Temp-Mail.org": inbox_tempmail}
+
+def generate_profile(country, extra_fields, provider):
+    locs = {'Italia': 'it_IT', 'Francia': 'fr_FR', 'Germania': 'de_DE', 'Lussemburgo': 'fr_LU'}
+    codes = {'Italia': 'IT', 'Francia': 'FR', 'Germania': 'DE', 'Lussemburgo': 'LU'}
+    locale, code = locs[country], codes[country]; fake = Faker(locale)
+    p = {'Nome': fake.first_name(), 'Cognome': fake.last_name(), 'Data di Nascita': fake.date_of_birth(minimum_age=18, maximum_age=80).strftime('%d/%m/%Y'), 'Indirizzo': fake.address().replace("\n", ", "), 'IBAN': get_next_iban(code), 'Paese': country}
+    if 'Email' in extra_fields:
+        create_func = CREATE_FUNCTIONS[provider]
+        result = create_func(); st.session_state.email_info = result
+        p["Email"] = result["address"] if result else "Creazione email fallita"
+    if 'Telefono' in extra_fields: p['Telefono'] = fake.phone_number()
+    if 'Codice Fiscale' in extra_fields: p['Codice Fiscale'] = fake.ssn() if locale == 'it_IT' else 'N/A'
+    if 'Partita IVA' in extra_fields: p['Partita IVA'] = fake.vat_id() if hasattr(fake, 'vat_id') else 'N/A'
+    return pd.DataFrame([p])
+
 def get_next_iban(cc):
     cc = cc.upper()
     if 'iban_state' not in st.session_state: st.session_state.iban_state = {}
@@ -153,21 +163,6 @@ def get_next_iban(cc):
         st.session_state.iban_state[cc] = {'list': lst, 'index': 0}
     st.session_state.iban_state[cc]['index'] += 1
     return st.session_state.iban_state[cc]['list'][st.session_state.iban_state[cc]['index'] - 1]
-
-def generate_profile(country, extra_fields, provider):
-    locs = {'Italia': 'it_IT', 'Francia': 'fr_FR', 'Germania': 'de_DE', 'Lussemburgo': 'fr_LU'}
-    codes = {'Italia': 'IT', 'Francia': 'FR', 'Germania': 'DE', 'Lussemburgo': 'LU'}
-    locale, code = locs[country], codes[country]; fake = Faker(locale)
-    p = {'Nome': fake.first_name(), 'Cognome': fake.last_name(), 'Data di Nascita': fake.date_of_birth(minimum_age=18, maximum_age=80).strftime('%d/%m/%Y'), 'Indirizzo': fake.address().replace("\n", ", "), 'IBAN': get_next_iban(code), 'Paese': country}
-    if 'Email' in extra_fields:
-        if provider == "Guerrilla Mail": result = create_guerrillamail_account()
-        elif provider == "Mail.tm (richiede chiave API)": result = create_mailtm_account()
-        st.session_state.email_info = result
-        p["Email"] = result["address"] if result else "Creazione email fallita"
-    if 'Telefono' in extra_fields: p['Telefono'] = fake.phone_number()
-    if 'Codice Fiscale' in extra_fields: p['Codice Fiscale'] = fake.ssn() if locale == 'it_IT' else 'N/A'
-    if 'Partita IVA' in extra_fields: p['Partita IVA'] = fake.vat_id() if hasattr(fake, 'vat_id') else 'N/A'
-    return pd.DataFrame([p])
 
 def display_profile_card(profile_data):
     st.subheader("📄 Dettagli del Profilo Generato")
@@ -178,7 +173,7 @@ def display_profile_card(profile_data):
             st.markdown(f"<div class='selectable-text-field' style='border: 1px solid rgba(250, 250, 250, 0.2); border-radius: 0.5rem;'>{value}</div>", unsafe_allow_html=True)
         with col2:
             if st.button("📋", key=f"copy_{label.lower()}", help=f"Copia {label}"):
-                streamlit_js_eval(js_expressions=f"navigator.clipboard.writeText('{value}')")
+                streamlit_js_eval(js_expressions=f"navigator.clipboard.writeText(`{value}`)")
                 st.toast(f"'{value}' copiato!")
     
     col1, col2 = st.columns(2)
@@ -214,12 +209,12 @@ with st.sidebar:
     country = st.selectbox("Paese", ["Italia", "Francia", "Germania", "Lussemburgo"])
     n = st.number_input("Numero di profili", 1, 25, 1)
     fields = st.multiselect("Campi aggiuntivi", ["Email", "Telefono", "Codice Fiscale", "Partita IVA"], default=["Email"])
-    provider = st.selectbox("Provider Email", ["Guerrilla Mail", "Mail.tm (richiede chiave API)"])
+    provider = st.selectbox("Provider Email", ["Guerrilla Mail", "Temp-Mail.org (richiede chiave API)"])
     
     is_button_disabled = False
-    if provider == "Mail.tm (richiede chiave API)":
+    if provider == "Temp-Mail.org (richiede chiave API)":
         if not st.secrets.get("rapidapi", {}).get("key"):
-            st.error("Per usare Mail.tm, imposta la chiave API nei Secrets di Streamlit.")
+            st.error("Per usare Temp-Mail.org, imposta la chiave API nei Secrets di Streamlit.")
             is_button_disabled = True
     
     if st.button("🚀 Genera Profili", type="primary", disabled=is_button_disabled):
@@ -239,5 +234,7 @@ if st.session_state.final_df is not None:
     info = st.session_state.email_info
     if 'Email' in st.session_state.final_df.columns and info and "fallita" not in info.get("address", "fallita"):
         auto_refresh_placeholder = st.empty()
-        if info['provider'] == "Guerrilla Mail": inbox_guerrillamail(info, auto_refresh_placeholder)
-        elif info['provider'] == "Mail.tm": inbox_mailtm(info, auto_refresh_placeholder)
+        # FIX: Corretto il mapping tra nome UI e nome provider
+        provider_key = info['provider']
+        inbox_func = INBOX_FUNCTIONS[provider_key]
+        inbox_func(info, auto_refresh_placeholder)
