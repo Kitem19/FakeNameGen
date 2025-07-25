@@ -7,7 +7,7 @@ import pandas as pd
 # import os
 # import json
 
-# Importa solo la funzione per generare un singolo profilo con campi specifici
+# Importa solo la funzione per generare un singolo profilo con campi specificiå√
 from generator_script import genera_profilo_singolo # Il nome funzione rimane lo stesso
 
 st.set_page_config(page_title="Generatore Profilo Fittizio Personalizzato", layout="centered")
