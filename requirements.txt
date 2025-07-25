@@ -1,7 +1,8 @@
-
 streamlit
 faker
 pandas
 requests
 openpyxl
 pydrive
+beautifulsoup4
+lxml 
