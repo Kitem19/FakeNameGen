@@ -180,7 +180,10 @@ if st.session_state.final_df is not None:
 
 
 # --- Funzioni mail.tm ---
-get_mailtm_domains
+domains = get_mailtm_domains()
+if domains:
+    domain = random.choice(domains)
+    username, password, token = create_mailtm_account(domain)
 
 # --- Mostra Email con icona copia ---
 
